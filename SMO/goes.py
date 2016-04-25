@@ -1,9 +1,11 @@
 import random
 import math
 from collections import defaultdict
-
+from functools import partial
 import numpy as np
 import pandas as pd
+import pickle
+from SMO.helpers import Drawer
 from SMO.helpers import Kernels
 from SMO.helpers.Stats import Stats
 
@@ -18,8 +20,8 @@ DIMS = 2
 # sigmoid = lambda x: np.arctan(x)
 
 DEBUG_OUTPUT = 0
-C = 1.0
-SIGMA = 0.025
+C = 0.4
+SIGMA = 0.25
 
 MAX_PASSES = 50
 TOL = 1e-3
@@ -35,6 +37,9 @@ def get_result(x_row, a, b, x, y):
     return sum(a[i] * y[i] * K(x[i], x_row) for i in range(len(y))) + b
 
 
+honest = True
+
+
 def process_one(d_train, d_test):
     np.random.shuffle(d_train)
     np.random.shuffle(d_test)
@@ -45,72 +50,77 @@ def process_one(d_train, d_test):
     m = len(d_train)
     a = np.zeros((m,))
     b = 0.0
-
-    passes = 0
-    while passes < MAX_PASSES:
-        num_changed_alphas = 0
-        for i in range(m):
-            ei = get_result(x[i], a, b, x, y) - 1.0 * y[i]
-            pt = 0
-            if (y[i] * ei < -TOL and a[i] < C) or (y[i] * ei > TOL and a[i] > 0):
-                j = random.randint(0, m - 1)
-                while j == i:
+    if honest:
+        passes = 0
+        while passes < MAX_PASSES:
+            num_changed_alphas = 0
+            for i in range(m):
+                ei = get_result(x[i], a, b, x, y) - 1.0 * y[i]
+                pt = 0
+                if (y[i] * ei < -TOL and a[i] < C) or (y[i] * ei > TOL and a[i] > 0):
                     j = random.randint(0, m - 1)
-                ej = get_result(x[j], a, b, x, y) - y[j]
-                old_ai, old_aj = a[i], a[j]
-                if y[i] != y[j]:
-                    L = max(0, a[j] - a[i])
-                    H = min(C, C + a[j] - a[i])
-                else:
-                    L = max(0, a[i] + a[j] - C)
-                    H = min(C, a[i] + a[j])
-                if L == H:
-                    continue
-                nu = 2 * K(x[i], x[j]) - K(x[i], x[i]) - K(x[j], x[j])
-                if nu >= 0:
-                    continue
-                a[j] -= y[j] * (ei - ej) / nu
-                if a[j] > H:
-                    a[j] = H
-                elif a[j] < L:
-                    a[j] = L
+                    while j == i:
+                        j = random.randint(0, m - 1)
+                    ej = get_result(x[j], a, b, x, y) - y[j]
+                    old_ai, old_aj = a[i], a[j]
+                    if y[i] != y[j]:
+                        L = max(0, a[j] - a[i])
+                        H = min(C, C + a[j] - a[i])
+                    else:
+                        L = max(0, a[i] + a[j] - C)
+                        H = min(C, a[i] + a[j])
+                    if L == H:
+                        continue
+                    nu = 2 * K(x[i], x[j]) - K(x[i], x[i]) - K(x[j], x[j])
+                    if nu >= 0:
+                        continue
+                    a[j] -= y[j] * (ei - ej) / nu
+                    if a[j] > H:
+                        a[j] = H
+                    elif a[j] < L:
+                        a[j] = L
 
-                if abs(a[j] - old_aj) < EPS:
-                    continue
-                a[i] += y[i] * y[j] * (old_aj - a[j])
+                    if abs(a[j] - old_aj) < EPS:
+                        continue
+                    a[i] += y[i] * y[j] * (old_aj - a[j])
 
-                b1 = b - ei - y[i] * (a[i] - old_ai) * K(x[i], x[i]) - y[j] * (a[j] - old_aj) * K(x[i], x[j])
-                b2 = b - ej - y[i] * (a[i] - old_ai) * K(x[i], x[j]) - y[j] * (a[j] - old_aj) * K(x[j], x[j])
-                if 0 < a[i] < C:
-                    b = b1
-                elif 0 < a[j] < C:
-                    b = b2
-                else:
-                    b = (b1 + b2) / 2
-                num_changed_alphas += 1
-        if num_changed_alphas == 0:
-            passes += 1
-        else:
-            passes = 0
+                    b1 = b - ei - y[i] * (a[i] - old_ai) * K(x[i], x[i]) - y[j] * (a[j] - old_aj) * K(x[i], x[j])
+                    b2 = b - ej - y[i] * (a[i] - old_ai) * K(x[i], x[j]) - y[j] * (a[j] - old_aj) * K(x[j], x[j])
+                    if 0 < a[i] < C:
+                        b = b1
+                    elif 0 < a[j] < C:
+                        b = b2
+                    else:
+                        b = (b1 + b2) / 2
+                    num_changed_alphas += 1
+            if num_changed_alphas == 0:
+                passes += 1
+            else:
+                passes = 0
 
-    # test
-    x = d_test[:, :DIMS]
-    y = d_test[:, DIMS]
+        # test
+        x = d_test[:, :DIMS]
+        y = d_test[:, DIMS]
 
-    if DEBUG_OUTPUT:
-        print('a:', a)
-        print('b:', b)
+        if DEBUG_OUTPUT:
+            print('a:', a)
+            print('b:', b)
 
-    P = np.array([get_result(x_row, a, b, d_train[:, :DIMS], d_train[:, DIMS]) >= 0.0 for x_row in x])
+        P = np.array([get_result(x_row, a, b, d_train[:, :DIMS], d_train[:, DIMS]) >= 0.0 for x_row in x])
+        pickle.dump(P, open('P.pickle', 'wb'))
+    else:
+        P = pickle.load(open('P.pickle', 'rb'))
     P_ans = P
     y_bool = y >= 0.0
 
+    Drawer.draw(d_train, d_test, P == y_bool)
+    print(P)
     s = Stats(P_ans, y_bool)
     return s.__dict__
 
 
 CROSS_K = 3
-CROSS_T = 3
+CROSS_T = 1
 
 TRAIN_PART = 0.9
 
@@ -132,7 +142,7 @@ def main():
         print('--- average from', CROSS_T, '---')
         x = defaultdict(lambda: 0.0)
         for j in range(CROSS_T):
-            cur_x = process_one(data[:train_n], data[:train_n])
+            cur_x = process_one(data[:train_n], data[train_n:])
             for k, v in cur_x.items():
                 x[k] += v
         x = {k: (v / CROSS_T) for k, v in x.items()}

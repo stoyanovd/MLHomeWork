@@ -31,7 +31,7 @@ def custom_dist(θ, xj):
     return sum((θ[i] * xj[i]) ** 2 for i in range(DIMS))
 
 
-STEPS_COUNT = 500
+STEPS_COUNT = 50
 
 
 def process_one(d_train, d_test):
@@ -58,7 +58,7 @@ def process_one(d_train, d_test):
 
 
 CROSS_K = 3
-CROSS_T = 3
+CROSS_T = 1
 
 TRAIN_PART = 0.9
 
